@@ -3045,3 +3045,72 @@ func TestPrepareBackupRequest_DeduplicateExcludedNamespaces(t *testing.T) {
 		})
 	}
 }
+
+// TestRunBackupDryRun verifies that a backup with Spec.DryRun set completes
+// normally but persists without backup contents: the tarball is neither created
+// nor uploaded, while metadata, log, resource list and results are uploaded as
+// usual.
+func TestRunBackupDryRun(t *testing.T) {
+	defaultBackupLocation := builder.ForBackupStorageLocation("velero", "loc-1").Default(true).Bucket("store-1").Phase(velerov1api.BackupStorageLocationPhaseAvailable).Result()
+
+	now, err := time.Parse(time.RFC1123Z, time.RFC1123Z)
+	require.NoError(t, err)
+	now = now.Local()
+
+	formatFlag := logging.FormatText
+	var (
+		logger           = logging.DefaultLogger(logrus.DebugLevel, formatFlag)
+		pluginManager    = new(pluginmocks.Manager)
+		backupStore      = new(persistencemocks.BackupStore)
+		backupper        = new(fakeBackupper)
+		fakeGlobalClient = velerotest.NewFakeControllerRuntimeClient(t)
+	)
+
+	apiServer := velerotest.NewAPIServer(t)
+	apiServer.DiscoveryClient.FakedServerVersion = &version.Info{
+		Major: "1", Minor: "16", GitVersion: "v1.16.4", GitCommit: "FakeTest",
+		GitTreeState: "", BuildDate: "", GoVersion: "", Compiler: "", Platform: "",
+	}
+	discoveryHelper, err := discovery.NewHelper(apiServer.DiscoveryClient, logger)
+	require.NoError(t, err)
+
+	c := &backupReconciler{
+		logger:                logger,
+		discoveryHelper:       discoveryHelper,
+		kbClient:              fakeGlobalClient,
+		defaultBackupLocation: defaultBackupLocation.Name,
+		backupTracker:         NewBackupTracker(),
+		metrics:               metrics.NewServerMetrics(),
+		clock:                 testclocks.NewFakeClock(now),
+		newPluginManager:      func(logrus.FieldLogger) clientmgmt.Manager { return pluginManager },
+		backupStoreGetter:     NewFakeSingleObjectBackupStoreGetter(backupStore),
+		backupper:             backupper,
+		formatFlag:            formatFlag,
+		globalCRClient:        fakeGlobalClient,
+	}
+
+	pluginManager.On("GetBackupItemActionsV2").Return(nil, nil)
+	pluginManager.On("GetItemBlockActions").Return(nil, nil)
+	pluginManager.On("CleanupClients").Return(nil)
+	backupper.On("BackupWithResolvers", mock.Anything, mock.Anything, mock.Anything, framework.BackupItemActionResolverV2{}, pluginManager).Return(nil)
+	backupStore.On("BackupExists", defaultBackupLocation.Spec.StorageType.ObjectStorage.Bucket, "backup-1").Return(false, nil)
+
+	// The dry-run backup must be persisted without contents.
+	backupStore.On("PutBackup", mock.MatchedBy(func(info persistence.BackupInfo) bool {
+		return info.Name == "backup-1" && info.Contents == nil
+	})).Return(nil)
+
+	backup := defaultBackup().DryRun(true).Result()
+	require.NoError(t, c.kbClient.Create(t.Context(), backup))
+	require.NoError(t, c.kbClient.Create(t.Context(), defaultBackupLocation))
+
+	actualResult, err := c.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}})
+	assert.Equal(t, ctrl.Result{}, actualResult)
+	require.NoError(t, err)
+
+	res := &velerov1api.Backup{}
+	require.NoError(t, c.kbClient.Get(t.Context(), kbclient.ObjectKey{Namespace: backup.Namespace, Name: backup.Name}, res))
+	assert.Equal(t, velerov1api.BackupPhaseFinalizing, res.Status.Phase)
+
+	backupStore.AssertExpectations(t)
+}

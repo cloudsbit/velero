@@ -205,3 +205,9 @@ func (b *RestoreBuilder) SkipDefaultResourceModifier(val bool) *RestoreBuilder {
 	b.object.Spec.SkipDefaultResourceModifier = &val
 	return b
 }
+
+// DryRun sets the Restore's dry run flag.
+func (b *RestoreBuilder) DryRun(val bool) *RestoreBuilder {
+	b.object.Spec.DryRun = val
+	return b
+}

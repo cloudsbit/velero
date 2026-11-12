@@ -391,6 +391,12 @@ func (ib *itemBackupper) backupPodVolumes(log logrus.FieldLogger, pod *corev1api
 		return nil, nil, nil
 	}
 
+	// Dry-run backups must not create PodVolumeBackups.
+	if ib.backupRequest.Spec.DryRun {
+		log.Info("Dry run backup: skipping PodVolumeBackup creation for pod volumes")
+		return nil, nil, nil
+	}
+
 	if ib.podVolumeBackupper == nil {
 		log.Warn("No pod volume backupper, not backing up pod's volumes")
 		return nil, nil, nil
@@ -609,6 +615,19 @@ const (
 // disk type and IOPS (if applicable) to be able to restore to current state later.
 func (ib *itemBackupper) takePVSnapshot(obj runtime.Unstructured, log logrus.FieldLogger) error {
 	log.Info("Executing takePVSnapshot")
+
+	// Dry-run backups must not create real snapshots.
+	if ib.backupRequest.Spec.DryRun {
+		log.Info("Dry run backup: skipping volume snapshot creation")
+		ib.trackSkippedVolume(
+			obj,
+			kuberesource.PersistentVolumes,
+			volumeSnapshotApproach,
+			"dry run backup: volume snapshot skipped",
+			log,
+		)
+		return nil
+	}
 
 	pv := new(corev1api.PersistentVolume)
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), pv); err != nil {

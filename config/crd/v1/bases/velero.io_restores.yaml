@@ -80,6 +80,15 @@ spec:
                   CSISnapshotTimeout specifies the time used to wait for CSI VolumeSnapshot ready to use during creation, before returning error as timeout.
                   The default value is 30 minute.
                 type: string
+              dryRun:
+                description: |-
+                  DryRun specifies that this restore should be a dry run: the full restore
+                  workflow runs (item filtering, plugin actions, namespace mapping), but
+                  no resources are created or patched in the cluster, and no
+                  PodVolumeRestores or DataDownloads are created. Logs, results and the
+                  restore resource list are uploaded as usual. Plugins should check this
+                  field before directly creating anything in-cluster.
+                type: boolean
               excludedNamespaces:
                 description: |-
                   ExcludedNamespaces contains a list of namespaces that are not

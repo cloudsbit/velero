@@ -290,6 +290,13 @@ func (p *pvcBackupItemAction) Execute(
 
 	ctx := context.Background()
 
+	// Dry-run backups must not create VolumeSnapshots or DataUploads: return
+	// the item unmodified so it's still recorded in the backup resource list.
+	if backup.Spec.DryRun {
+		p.log.Info("Dry run backup: skipping VolumeSnapshot creation and data upload for PVC")
+		return item, nil, "", nil, nil
+	}
+
 	if valid := p.validateBackup(*backup); !valid {
 		return item, nil, "", nil, nil
 	}

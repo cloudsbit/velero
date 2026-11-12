@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"time"
@@ -890,12 +891,22 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	}
 	defer backupLog.Dispose(b.logger.WithField(constant.ControllerBackup, kubeutil.NamespaceAndName(backup)))
 
-	backupLog.Info("Setting up backup temp file")
-	backupFile, err := os.CreateTemp("", "")
-	if err != nil {
-		return errors.Wrap(err, "error creating temp file for backup")
+	// In dry-run mode the backup tarball is neither created nor uploaded: the
+	// item serialization still runs, but its output is discarded.
+	var backupFile *os.File
+	var backupFileWriter io.Writer
+	if backup.Spec.DryRun {
+		backupLog.Info("Backup is a dry run: skipping backup tarball creation")
+		backupFileWriter = io.Discard
+	} else {
+		backupLog.Info("Setting up backup temp file")
+		backupFile, err = os.CreateTemp("", "")
+		if err != nil {
+			return errors.Wrap(err, "error creating temp file for backup")
+		}
+		defer closeAndRemoveFile(backupFile, backupLog)
+		backupFileWriter = backupFile
 	}
-	defer closeAndRemoveFile(backupFile, backupLog)
 
 	backupLog.Info("Setting up plugin manager")
 	pluginManager := b.newPluginManager(backupLog)
@@ -931,7 +942,7 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	itemBlockActionResolver := framework.NewItemBlockActionResolver(ibActions)
 
 	var fatalErrs []error
-	if err := b.backupper.BackupWithResolvers(backupLog, backup, backupFile, backupItemActionsResolver, itemBlockActionResolver, pluginManager); err != nil {
+	if err := b.backupper.BackupWithResolvers(backupLog, backup, backupFileWriter, backupItemActionsResolver, itemBlockActionResolver, pluginManager); err != nil {
 		fatalErrs = append(fatalErrs, err)
 	}
 
@@ -1014,7 +1025,13 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	if logFile, err := backupLog.GetPersistFile(); err != nil {
 		fatalErrs = append(fatalErrs, errors.Wrap(err, "error getting backup log file"))
 	} else {
-		if errs := persistBackup(backup, backupFile, logFile, backupStore, volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses, results, b.globalCRClient, backupLog); len(errs) > 0 {
+		// In dry-run mode the contents must be an untyped nil io.Reader (not a
+		// typed nil *os.File) so the backup store skips uploading the tarball.
+		var backupContents io.Reader
+		if !backup.Spec.DryRun {
+			backupContents = backupFile
+		}
+		if errs := persistBackup(backup, backupContents, logFile, backupStore, volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses, results, b.globalCRClient, backupLog); len(errs) > 0 {
 			fatalErrs = append(fatalErrs, errs...)
 		}
 	}
@@ -1068,7 +1085,7 @@ func recordBackupMetrics(log logrus.FieldLogger, backup *velerov1api.Backup, bac
 }
 
 func persistBackup(backup *pkgbackup.Request,
-	backupContents, backupLog *os.File,
+	backupContents io.Reader, backupLog *os.File,
 	backupStore persistence.BackupStore,
 	csiVolumeSnapshots []snapshotv1api.VolumeSnapshot,
 	csiVolumeSnapshotContents []snapshotv1api.VolumeSnapshotContent,

@@ -38,6 +38,9 @@ const (
 	ItemRestoreResultUpdated = "updated"
 	ItemRestoreResultFailed  = "failed"
 	ItemRestoreResultSkipped = "skipped"
+	// ItemRestoreResultDryRun marks items that would have been restored but were
+	// not created/patched because the restore is a dry run.
+	ItemRestoreResultDryRun = "dryrun"
 )
 
 type itemKey struct {

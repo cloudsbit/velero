@@ -130,6 +130,7 @@ type CreateOptions struct {
 	ParallelFilesUpload             int
 	ParallelBlocksUpload            int
 	BackupType                      string
+	DryRun                          bool
 }
 
 func NewCreateOptions() *CreateOptions {
@@ -180,6 +181,7 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	flags.IntVar(&o.ParallelFilesUpload, "parallel-files-upload", 0, "Number of files uploads simultaneously when running a backup. This is only applicable for Velero fs uploader")
 	flags.IntVar(&o.ParallelBlocksUpload, "parallel-blocks-upload", 0, "Number of block uploads simultaneously when running a backup. This is only applicable for Velero block uploader")
 	flags.StringVar(&o.BackupType, "backup-type", "", "Specify how volume data is backed up, with possible values including Full and Incremental.")
+	flags.BoolVar(&o.DryRun, "dry-run", o.DryRun, "Create the Backup resource and run the backup workflow without side effects: no backup tarball is created or uploaded, and no volume snapshots, PodVolumeBackups or DataUploads are created. Note this differs from kubectl --dry-run: the Backup resource is created and processed by the Velero server. The backup log and resource list are uploaded as usual so you can review what would have been backed up.")
 }
 
 // BindWait binds the wait flag separately so it is not called by other create
@@ -467,7 +469,8 @@ func (o *CreateOptions) BuildBackup(namespace string) (*velerov1api.Backup, erro
 			CSISnapshotTimeout(o.CSISnapshotTimeout).
 			ItemOperationTimeout(o.ItemOperationTimeout).
 			DataMover(o.DataMover).
-			BackupType(velerov1api.BackupType(o.BackupType))
+			BackupType(velerov1api.BackupType(o.BackupType)).
+			DryRun(o.DryRun)
 		if len(o.OrderedResources) > 0 {
 			orders, err := ParseOrderedResources(o.OrderedResources)
 			if err != nil {

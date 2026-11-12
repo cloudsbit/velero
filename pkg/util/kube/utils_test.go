@@ -56,6 +56,7 @@ func TestEnsureNamespaceExistsAndIsReady(t *testing.T) {
 		expectedCreatedResult         bool
 		nsAlreadyInTerminationTracker bool
 		ResourceDeletionStatusTracker ResourceDeletionStatusTracker
+		dryRun                        bool
 	}{
 		{
 			name:                  "namespace found, not deleting",
@@ -80,6 +81,20 @@ func TestEnsureNamespaceExistsAndIsReady(t *testing.T) {
 		{
 			name:                  "namespace not found, successfully created",
 			expectCreate:          true,
+			expectedResult:        true,
+			expectedCreatedResult: true,
+		},
+		{
+			name:                  "dry run, namespace found, not created",
+			expectNSFound:         true,
+			dryRun:                true,
+			expectedResult:        true,
+			expectedCreatedResult: false,
+		},
+		{
+			name:                  "dry run, namespace not found, reported as created without create call",
+			expectNSFound:         false,
+			dryRun:                true,
 			expectedResult:        true,
 			expectedCreatedResult: true,
 		},
@@ -146,7 +161,7 @@ func TestEnsureNamespaceExistsAndIsReady(t *testing.T) {
 				resourceDeletionStatusTracker.Add(namespace.Kind, "test", "test")
 			}
 
-			result, nsCreated, _ := EnsureNamespaceExistsAndIsReady(namespace, nsClient, timeout, resourceDeletionStatusTracker)
+			result, nsCreated, _ := EnsureNamespaceExistsAndIsReady(namespace, nsClient, timeout, resourceDeletionStatusTracker, test.dryRun)
 
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedCreatedResult, nsCreated)
@@ -178,7 +193,7 @@ func TestEnsureNamespaceExistsAndIsReadyTerminatingTrackerKindMismatch(t *testin
 	tracker := NewResourceDeletionStatusTracker()
 	tracker.Add(namespace.Kind, namespace.Name, namespace.Name)
 
-	result, nsCreated, err := EnsureNamespaceExistsAndIsReady(namespace, nsClient, time.Millisecond, tracker)
+	result, nsCreated, err := EnsureNamespaceExistsAndIsReady(namespace, nsClient, time.Millisecond, tracker, false)
 
 	assert.False(t, result)
 	assert.False(t, nsCreated)

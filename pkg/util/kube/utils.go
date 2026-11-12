@@ -77,11 +77,29 @@ func NamespaceAndName(objMeta metav1.Object) string {
 //   - a bool indicating whether or not the namespace was created
 //   - an error if one occurred.
 //
+// When dryRun is true, the namespace is not actually created: if it doesn't
+// exist in the cluster, the function reports it as ready and created so the
+// caller can account for it, without any side effect.
+//
 // examples:
 //
 //	namespace already exists and is not ready, this function will return (false, false, nil).
 //	If the namespace exists and is marked for deletion, this function will wait up to the timeout for it to fully delete.
-func EnsureNamespaceExistsAndIsReady(namespace *corev1api.Namespace, client corev1client.NamespaceInterface, timeout time.Duration, resourceDeletionStatusTracker ResourceDeletionStatusTracker) (ready bool, nsCreated bool, err error) {
+func EnsureNamespaceExistsAndIsReady(namespace *corev1api.Namespace, client corev1client.NamespaceInterface, timeout time.Duration, resourceDeletionStatusTracker ResourceDeletionStatusTracker, dryRun bool) (ready bool, nsCreated bool, err error) {
+	if dryRun {
+		_, err = client.Get(context.Background(), namespace.Name, metav1.GetOptions{})
+		if err == nil {
+			// namespace already exists and is ready for use
+			return true, false, nil
+		}
+		if apierrors.IsNotFound(err) {
+			// namespace doesn't exist: report it as would-be-created without
+			// actually creating it
+			return true, true, nil
+		}
+		return false, false, errors.Wrapf(err, "error getting namespace %s", namespace.Name)
+	}
+
 	// nsCreated tells whether the namespace was created by this method
 	// required for keeping track of number of restored items
 	// if namespace is marked for deletion, and we timed out, report an error

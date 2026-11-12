@@ -114,6 +114,15 @@ spec:
                       Deprecated: this field is no longer used and will be removed entirely in future. Use DefaultVolumesToFsBackup instead.
                     nullable: true
                     type: boolean
+                  dryRun:
+                    description: |-
+                      DryRun specifies that this backup should be a dry run: the full backup
+                      workflow runs (item collection, filters, plugin actions), but no backup
+                      tarball is created or uploaded, and no snapshots, PodVolumeBackups or
+                      DataUploads are created. Logs, results and the backup resource list are
+                      uploaded as usual. Plugins should check this field before directly
+                      creating anything in-cluster.
+                    type: boolean
                   excludedClusterScopedResources:
                     description: |-
                       ExcludedClusterScopedResources is a slice of cluster-scoped
@@ -559,8 +568,8 @@ spec:
                     nullable: true
                     properties:
                       parallelBlocksUpload:
-                        description: ParallelBlocksUpload is the number of blocks parallel
-                          uploads to perform when using Velero block uploader.
+                        description: ParallelBlocksUpload is the number of blocks
+                          parallel uploads to perform when using Velero block uploader.
                         type: integer
                       parallelFilesUpload:
                         description: ParallelFilesUpload is the number of files parallel

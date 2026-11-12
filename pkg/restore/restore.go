@@ -321,6 +321,7 @@ func (kr *kubernetesRestorer) RestoreWithResolvers(
 	pvRestorer := &pvRestorer{
 		logger:                  req.Log,
 		backup:                  req.Backup,
+		restore:                 req.Restore,
 		restorePVs:              req.Restore.Spec.RestorePVs,
 		volumeSnapshots:         req.VolumeSnapshots,
 		volumeSnapshotterGetter: volumeSnapshotterGetter,
@@ -1041,6 +1042,7 @@ func (ctx *restoreContext) processSelectedResource(
 					ctx.namespaceClient,
 					ctx.resourceTerminatingTimeout,
 					ctx.resourceDeletionStatusTracker,
+					ctx.restore.Spec.DryRun,
 				)
 				if err != nil {
 					errs.AddVeleroError(err)
@@ -1054,7 +1056,11 @@ func (ctx *restoreContext) processSelectedResource(
 						namespace: ns.Namespace,
 						name:      ns.Name,
 					}
-					ctx.restoredItems[itemKey] = restoredItemStatus{action: ItemRestoreResultCreated, itemExists: true, createdName: ns.Name}
+					if ctx.restore.Spec.DryRun {
+						ctx.restoredItems[itemKey] = restoredItemStatus{action: ItemRestoreResultDryRun, itemExists: true, createdName: ns.Name}
+					} else {
+						ctx.restoredItems[itemKey] = restoredItemStatus{action: ItemRestoreResultCreated, itemExists: true, createdName: ns.Name}
+					}
 				}
 
 				// Keep track of namespaces that we know exist so we don't
@@ -1467,7 +1473,7 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 		}
 
 		nsToEnsure := getNamespace(restoreLogger, nsPath, namespace)
-		_, nsCreated, err := kube.EnsureNamespaceExistsAndIsReady(nsToEnsure, ctx.namespaceClient, ctx.resourceTerminatingTimeout, ctx.resourceDeletionStatusTracker)
+		_, nsCreated, err := kube.EnsureNamespaceExistsAndIsReady(nsToEnsure, ctx.namespaceClient, ctx.resourceTerminatingTimeout, ctx.resourceDeletionStatusTracker, ctx.restore.Spec.DryRun)
 		if err != nil {
 			errs.AddVeleroError(err)
 			return warnings, errs, itemExists
@@ -1479,7 +1485,11 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 				namespace: nsToEnsure.Namespace,
 				name:      nsToEnsure.Name,
 			}
-			ctx.restoredItems[itemKey] = restoredItemStatus{action: ItemRestoreResultCreated, itemExists: true, createdName: nsToEnsure.Name}
+			if ctx.restore.Spec.DryRun {
+				ctx.restoredItems[itemKey] = restoredItemStatus{action: ItemRestoreResultDryRun, itemExists: true, createdName: nsToEnsure.Name}
+			} else {
+				ctx.restoredItems[itemKey] = restoredItemStatus{action: ItemRestoreResultCreated, itemExists: true, createdName: nsToEnsure.Name}
+			}
 		}
 	}
 
@@ -1908,7 +1918,26 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 		restoreLogger.Debugf("Checking for existence %s", obj.GetName())
 		fromCluster, err = ctx.getResource(newGR, obj, namespace)
 	}
-	if err != nil || fromCluster == nil {
+	if ctx.restore.Spec.DryRun && fromCluster == nil {
+		// Dry-run: no create call is made. When the informer cache is disabled,
+		// existence wasn't checked yet, so get the resource directly to report
+		// accurately whether it would have been created.
+		if ctx.disableInformerCache {
+			fromCluster, err = resourceClient.Get(obj.GetName(), metav1.GetOptions{})
+		}
+		if err != nil || fromCluster == nil {
+			// The resource doesn't exist in the cluster: a real restore would
+			// have created it.
+			restoreLogger.Infof("Dry run restore: skipping creation of %s %s", obj.GroupVersionKind().Kind, obj.GetName())
+			itemExists = true
+			createdObj = obj.DeepCopy()
+			ctx.restoredItems[itemKey] = restoredItemStatus{
+				action:      ItemRestoreResultDryRun,
+				itemExists:  itemExists,
+				createdName: obj.GetName(),
+			}
+		}
+	} else if err != nil || fromCluster == nil {
 		// couldn't find the resource, attempt to create
 		restoreLogger.Debugf("Creating %s", obj.GetName())
 		createdObj, restoreErr = resourceClient.Create(obj)
@@ -1949,6 +1978,17 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 		itemStatus := ctx.restoredItems[itemKey]
 		itemStatus.itemExists = itemExists
 		ctx.restoredItems[itemKey] = itemStatus
+
+		// Dry-run: the resource already exists in the cluster and a real restore
+		// would patch/update or skip it according to the existing resource
+		// policy. Nothing may be patched or deleted in dry-run mode, so record
+		// the item and return.
+		if ctx.restore.Spec.DryRun {
+			itemStatus.action = ItemRestoreResultDryRun
+			ctx.restoredItems[itemKey] = itemStatus
+			restoreLogger.Infof("Dry run restore: skipping modification of existing resource %s", kube.NamespaceAndName(obj))
+			return warnings, errs, itemExists
+		}
 
 		// PodVolumeRestores are only created for pods Velero creates, so an
 		// existing pod silently skips the volume data restore. For an in-place
@@ -2118,7 +2158,7 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 	}
 
 	// Proceed with status restoration if decided
-	if statusFieldExists && shouldRestoreStatus {
+	if statusFieldExists && shouldRestoreStatus && !ctx.restore.Spec.DryRun {
 		if err := unstructured.SetNestedField(obj.Object, objStatus, "status"); err != nil {
 			restoreLogger.Errorf("could not set status field %s: %s", kube.NamespaceAndName(obj), err.Error())
 			errs.Add(namespace, err)
@@ -2156,7 +2196,7 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 		errs.Add(namespace, err)
 		return warnings, errs, itemExists
 	}
-	if patchBytes != nil {
+	if patchBytes != nil && !ctx.restore.Spec.DryRun {
 		if _, err = resourceClient.Patch(createdObj.GetName(), patchBytes); err != nil {
 			if !apierrors.IsNotFound(err) {
 				restoreLogger.Errorf("error patch for managed fields %s: %s", kube.NamespaceAndName(createdObj), err.Error())
@@ -2178,7 +2218,12 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 		}
 
 		if len(podvolume.GetVolumeBackupsForPod(ctx.podVolumeBackups, pod, originalNamespace)) > 0 {
-			restorePodVolumeBackups(ctx, createdObj, originalNamespace)
+			// Dry-run restores must not create PodVolumeRestores.
+			if ctx.restore.Spec.DryRun {
+				restoreLogger.Infof("Dry run restore: skipping PodVolumeRestore creation for pod %s", kube.NamespaceAndName(pod))
+			} else {
+				restorePodVolumeBackups(ctx, createdObj, originalNamespace)
+			}
 		}
 	}
 
@@ -2199,12 +2244,20 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 			return warnings, errs, itemExists
 		}
 
-		ctx.hooksWaitExecutor.exec(execHooksByContainer, pod, ctx.multiHookTracker, ctx.restore.Name)
+		// Dry-run restores must not execute hooks: running them would execute
+		// commands inside pods.
+		if ctx.restore.Spec.DryRun {
+			restoreLogger.Infof("Dry run restore: skipping exec hooks for pod %s", kube.NamespaceAndName(pod))
+		} else {
+			ctx.hooksWaitExecutor.exec(execHooksByContainer, pod, ctx.multiHookTracker, ctx.restore.Name)
+		}
 	}
 
 	// Wait for a CRD to be available for instantiating resources
 	// before continuing.
-	if newGR == kuberesource.CustomResourceDefinitions {
+	// Dry-run restores skip this: the CRD was not actually created, so it will
+	// never become available.
+	if newGR == kuberesource.CustomResourceDefinitions && !ctx.restore.Spec.DryRun {
 		available, err := ctx.crdAvailable(obj.GetName(), resourceClient)
 		if err != nil {
 			errs.Add(namespace, errors.Wrapf(err, "error verifying the CRD %s is ready to use", obj.GetName()))

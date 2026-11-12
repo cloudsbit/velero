@@ -118,6 +118,7 @@ type CreateOptions struct {
 	WriteSparseFiles            flag.OptionalBool
 	ParallelFilesDownload       int
 	DeleteExtraFiles            flag.OptionalBool
+	DryRun                      bool
 	client                      kbclient.WithWatch
 }
 
@@ -186,6 +187,8 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 
 	f = flags.VarPF(&o.DeleteExtraFiles, "delete-extra-files", "", "Whether to delete extra files in the target volume that do not exist in the backup during file system restore. This setting is only applicable to File System restores (PodVolumeBackup or CSI File System Data Move) and has no effect on Block Data Move restores.")
 	f.NoOptDefVal = cmd.TRUE
+
+	flags.BoolVar(&o.DryRun, "dry-run", o.DryRun, "Create the Restore resource and run the restore workflow without side effects: no resources are created or patched in the cluster, and no PodVolumeRestores or DataDownloads are created. Note this differs from kubectl --dry-run: the Restore resource is created and processed by the Velero server. The restore log and resource list are uploaded as usual so you can review what would have been restored.")
 }
 
 func (o *CreateOptions) Complete(args []string, f client.Factory) error {
@@ -384,6 +387,7 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 				ParallelFilesDownload: o.ParallelFilesDownload,
 				DeleteExtraFiles:      o.DeleteExtraFiles.Value,
 			},
+			DryRun: o.DryRun,
 		},
 	}
 

@@ -164,6 +164,15 @@ type RestoreSpec struct {
 	// +optional
 	// +nullable
 	UploaderConfig *UploaderConfigForRestore `json:"uploaderConfig,omitempty"`
+
+	// DryRun specifies that this restore should be a dry run: the full restore
+	// workflow runs (item filtering, plugin actions, namespace mapping), but
+	// no resources are created or patched in the cluster, and no
+	// PodVolumeRestores or DataDownloads are created. Logs, results and the
+	// restore resource list are uploaded as usual. Plugins should check this
+	// field before directly creating anything in-cluster.
+	// +optional
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 // UploaderConfigForRestore defines the configuration for the restore.

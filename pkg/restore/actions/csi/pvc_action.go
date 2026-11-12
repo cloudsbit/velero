@@ -122,7 +122,15 @@ func (p *pvcRestoreItemAction) Execute(
 		if err := p.crClient.Get(context.TODO(), crclient.ObjectKey{Namespace: input.Restore.Namespace, Name: input.Restore.Spec.BackupName}, backup); err != nil {
 			return nil, fmt.Errorf("fail to get backup for restore: %s", err.Error())
 		}
-		if boolptr.IsSetToTrue(backup.Spec.SnapshotMoveData) {
+		if input.Restore.Spec.DryRun && boolptr.IsSetToTrue(backup.Spec.SnapshotMoveData) {
+			// Dry-run restores must not delete the existing PVC, create the CBT
+			// baseline VolumeSnapshot or create the DataDownload: return the item
+			// unmodified.
+			logger.Info("Dry run restore: skipping DataDownload creation for PVC")
+			output = &velero.RestoreItemActionExecuteOutput{
+				UpdatedItem: input.Item,
+			}
+		} else if boolptr.IsSetToTrue(backup.Spec.SnapshotMoveData) {
 			output, err = p.executeWithDataMove(logger, input, backup, pvcExists, existingPVC, &pvc, &pvcFromBackup)
 		} else {
 			output, err = p.executeWithoutDataMove(logger, input, pvcExists, &pvc, vsName)

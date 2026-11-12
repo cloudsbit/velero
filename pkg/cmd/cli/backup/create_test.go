@@ -584,3 +584,27 @@ func TestCreateOptions_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateOptions_BuildBackupDryRun(t *testing.T) {
+	o := NewCreateOptions()
+	o.DryRun = true
+
+	backup, err := o.BuildBackup(cmdtest.VeleroNameSpace)
+	require.NoError(t, err)
+	assert.True(t, backup.Spec.DryRun)
+
+	o.DryRun = false
+	backup, err = o.BuildBackup(cmdtest.VeleroNameSpace)
+	require.NoError(t, err)
+	assert.False(t, backup.Spec.DryRun)
+}
+
+func TestCreateOptions_DryRunFlag(t *testing.T) {
+	flags := new(flag.FlagSet)
+	o := NewCreateOptions()
+	o.BindFlags(flags)
+
+	require.False(t, o.DryRun)
+	require.NoError(t, flags.Parse([]string{"--dry-run"}))
+	require.True(t, o.DryRun)
+}

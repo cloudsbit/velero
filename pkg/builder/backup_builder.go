@@ -350,6 +350,12 @@ func (b *BackupBuilder) BackupType(backupType velerov1api.BackupType) *BackupBui
 	return b
 }
 
+// DryRun sets the Backup's dry run flag.
+func (b *BackupBuilder) DryRun(val bool) *BackupBuilder {
+	b.object.Spec.DryRun = val
+	return b
+}
+
 // WithStatus sets the Backup's status.
 func (b *BackupBuilder) WithStatus(status velerov1api.BackupStatus) *BackupBuilder {
 	b.object.Status = status

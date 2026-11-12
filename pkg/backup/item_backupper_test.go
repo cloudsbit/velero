@@ -811,3 +811,43 @@ func (e *excludeResourceIE) ShouldInclude(typeName string) bool {
 func (e *excludeResourceIE) ShouldExclude(typeName string) bool {
 	return typeName == e.excluded
 }
+
+func TestTakePVSnapshot_DryRun(t *testing.T) {
+	ib := &itemBackupper{
+		backupRequest: &Request{
+			Backup:               builder.ForBackup(velerov1api.DefaultNamespace, "backup-1").DryRun(true).Result(),
+			SkippedVolumeTracker: NewSkipVolumeTracker(),
+		},
+	}
+
+	// Set up log capture
+	logOutput := &bytes.Buffer{}
+	logger := logrus.New()
+	logger.SetOutput(logOutput)
+	logger.SetLevel(logrus.DebugLevel)
+	logger.SetFormatter(&logrus.TextFormatter{
+		DisableColors:    true,
+		DisableTimestamp: true,
+		DisableQuote:     true,
+	})
+
+	pv := builder.ForPersistentVolume("pv-1").ClaimRef("ns-1", "pvc-1").Result()
+	pvData, err := runtime.DefaultUnstructuredConverter.ToUnstructured(pv)
+	require.NoError(t, err)
+	obj := &unstructured.Unstructured{Object: pvData}
+
+	// volumeSnapshotterGetter is nil: without the dry-run guard, takePVSnapshot
+	// would proceed to create a snapshot and fail/panic.
+	require.NoError(t, ib.takePVSnapshot(obj, logger))
+	assert.Contains(t, logOutput.String(), "Dry run backup: skipping volume snapshot creation")
+
+	summary := ib.backupRequest.SkippedVolumeTracker.Summary()
+	found := false
+	for _, v := range summary {
+		if v.PVName == "pv-1" && v.PVCName == "pvc-1" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected the PV to be tracked as a skipped volume")
+}

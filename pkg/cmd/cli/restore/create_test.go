@@ -240,3 +240,13 @@ func TestCreateCommand(t *testing.T) {
 		require.Equal(t, ResourcePoliciesConfigMap, createdRestore.Spec.ResourcePolicy.Name)
 	})
 }
+
+func TestCreateOptions_DryRunFlag(t *testing.T) {
+	flags := new(pflag.FlagSet)
+	o := NewCreateOptions()
+	o.BindFlags(flags)
+
+	require.False(t, o.DryRun)
+	require.NoError(t, flags.Parse([]string{"--dry-run"}))
+	require.True(t, o.DryRun)
+}

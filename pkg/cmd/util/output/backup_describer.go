@@ -212,6 +212,10 @@ func DescribeBackupSpec(d *Describer, spec velerov1api.BackupSpec) {
 		d.Printf("Backup Type:\t%s\n", spec.BackupType)
 	}
 
+	if spec.DryRun {
+		d.Printf("Dry Run:\t%s\n", "true")
+	}
+
 	d.Println()
 	d.Printf("TTL:\t%s\n", spec.TTL.Duration)
 

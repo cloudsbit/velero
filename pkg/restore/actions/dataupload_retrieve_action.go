@@ -111,6 +111,14 @@ func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 		},
 	}
 
+	// Dry-run restores must not create the DataUploadResult ConfigMap.
+	if input.Restore.Spec.DryRun {
+		d.logger.Info("Dry run restore: skipping DataUploadResult ConfigMap creation")
+		return &velero.RestoreItemActionExecuteOutput{
+			SkipRestore: true,
+		}, nil
+	}
+
 	err = veleroclient.CreateRetryGenerateName(d.client, context.Background(), &cm)
 	if err != nil {
 		d.logger.Errorf("fail to create DataUploadResult ConfigMap %s/%s: %s", cm.Namespace, cm.Name, err.Error())

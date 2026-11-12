@@ -5543,3 +5543,86 @@ func TestRestoreInplaceSourceSizeCarrierAnnotation(t *testing.T) {
 		assert.NotContains(t, got.GetAnnotations(), velerov1api.InplaceRestoreSourceSizeAnnotation)
 	})
 }
+
+// TestRestoreDryRun runs restores with Spec.DryRun set and verifies that no
+// items are created in the API, while the restored resource list records all
+// items that would have been restored as dry-run entries.
+func TestRestoreDryRun(t *testing.T) {
+	tests := []struct {
+		name             string
+		apiResources     []*test.APIResource
+		tarball          io.Reader
+		wantResourceList map[string][]string
+	}{
+		{
+			name: "dry run restore creates nothing and records all items as dry run",
+			apiResources: []*test.APIResource{
+				test.Pods(),
+			},
+			tarball: test.NewTarWriter(t).
+				AddItems("pods",
+					builder.ForPod("ns-1", "pod-1").Result(),
+					builder.ForPod("ns-2", "pod-2").Result(),
+				).
+				Done(),
+			wantResourceList: map[string][]string{
+				"v1/Pod":       {"ns-1/pod-1(dryrun)", "ns-2/pod-2(dryrun)"},
+				"v1/Namespace": {"ns-1(dryrun)", "ns-2(dryrun)"},
+			},
+		},
+		{
+			name: "dry run restore does not modify existing resources",
+			apiResources: []*test.APIResource{
+				test.Pods(builder.ForPod("ns-1", "pod-1").Result()),
+			},
+			tarball: test.NewTarWriter(t).
+				AddItems("pods",
+					builder.ForPod("ns-1", "pod-1").Result(),
+					builder.ForPod("ns-2", "pod-2").Result(),
+				).
+				Done(),
+			wantResourceList: map[string][]string{
+				"v1/Pod":       {"ns-1/pod-1(dryrun)", "ns-2/pod-2(dryrun)"},
+				"v1/Namespace": {"ns-1(dryrun)", "ns-2(dryrun)"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+
+			// Register resources (and create any pre-existing items) before
+			// hooking the create recorder, so only restore-time creates are
+			// recorded.
+			for _, r := range tc.apiResources {
+				h.AddItems(t, r)
+			}
+
+			recorder := &createRecorder{t: t}
+			h.DynamicClient.PrependReactor("create", "*", recorder.reactor())
+
+			data := &Request{
+				Log:              h.log,
+				Restore:          defaultRestore().DryRun(true).Result(),
+				Backup:           defaultBackup().Result(),
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
+			}
+			warnings, errs := h.restorer.Restore(
+				data,
+				nil, // restoreItemActions
+				nil, // volume snapshotter getter
+			)
+
+			assertEmptyResults(t, warnings, errs)
+			assert.Empty(t, recorder.resources, "expected no resources to be created in a dry run restore")
+
+			restoredResourceList := data.RestoredResourceList()
+			for resource, want := range tc.wantResourceList {
+				assert.ElementsMatch(t, want, restoredResourceList[resource])
+			}
+		})
+	}
+}

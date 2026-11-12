@@ -198,6 +198,10 @@ func DescribeRestore(
 		d.Printf("Existing Volume Data Policy: \t%s\n", s)
 		d.Printf("ItemOperationTimeout:\t%s\n", restore.Spec.ItemOperationTimeout.Duration)
 
+		if restore.Spec.DryRun {
+			d.Printf("Dry Run:\t%s\n", "true")
+		}
+
 		d.Println()
 		d.Printf("Preserve Service NodePorts:\t%s\n", BoolPointerString(restore.Spec.PreserveNodePorts, "false", "true", "auto"))
 

@@ -38,6 +38,7 @@ type PVRestorer interface {
 type pvRestorer struct {
 	logger                  logrus.FieldLogger
 	backup                  *api.Backup
+	restore                 *api.Restore
 	restorePVs              *bool
 	volumeSnapshots         []*volume.Snapshot
 	volumeSnapshotterGetter VolumeSnapshotterGetter
@@ -54,6 +55,12 @@ func (r *pvRestorer) executePVAction(obj *unstructured.Unstructured) (*unstructu
 
 	if boolptr.IsSetToFalse(r.restorePVs) {
 		// The restore has pv restores disabled, so we can return early
+		return obj, nil
+	}
+
+	// Dry-run restores must not create volumes from snapshots in the cloud.
+	if r.restore != nil && r.restore.Spec.DryRun {
+		r.logger.WithField("persistentVolume", pvName).Info("Dry run restore: skipping volume creation from snapshot")
 		return obj, nil
 	}
 

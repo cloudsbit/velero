@@ -918,6 +918,14 @@ func (kb *kubernetesBackupper) handleItemBlockPreHooks(itemBlock *BackupItemBloc
 	var successPods []itemblock.ItemBlockItem
 	var failedPods []itemblock.ItemBlockItem
 	var errs []error
+
+	// Dry-run backups must not execute hooks: running them would execute
+	// commands inside pods.
+	if itemBlock.itemBackupper.backupRequest.Spec.DryRun {
+		itemBlock.Log.Info("Dry run backup: skipping pre hooks")
+		return hookPods, nil, nil
+	}
+
 	for _, pod := range hookPods {
 		err := itemBlock.itemBackupper.itemHookHandler.HandleHooks(itemBlock.Log, pod.Gr, pod.Item, itemBlock.itemBackupper.backupRequest.ResourceHooks, hook.PhasePre, itemBlock.itemBackupper.hookTracker)
 		if err == nil {
@@ -933,6 +941,13 @@ func (kb *kubernetesBackupper) handleItemBlockPreHooks(itemBlock *BackupItemBloc
 // The hooks cannot execute until the PVBs to be processed
 func (kb *kubernetesBackupper) handleItemBlockPostHooks(itemBlock *BackupItemBlock, hookPods []itemblock.ItemBlockItem) {
 	log := itemBlock.Log
+
+	// Dry-run backups must not execute hooks: running them would execute
+	// commands inside pods.
+	if itemBlock.itemBackupper.backupRequest.Spec.DryRun {
+		log.Info("Dry run backup: skipping post hooks")
+		return
+	}
 
 	// the post hooks will not execute until all PVBs of the item block pods are processed
 	if err := kb.waitUntilPVBsProcessed(itemBlock.itemBackupper.podVolumeContext, log, itemBlock, hookPods); err != nil {

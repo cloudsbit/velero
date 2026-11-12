@@ -191,6 +191,15 @@ type BackupSpec struct {
 	// BackupType specifies how volume data is backed up, with possible values including Full and Incremental.
 	// +optional
 	BackupType BackupType `json:"backupType,omitempty"`
+
+	// DryRun specifies that this backup should be a dry run: the full backup
+	// workflow runs (item collection, filters, plugin actions), but no backup
+	// tarball is created or uploaded, and no snapshots, PodVolumeBackups or
+	// DataUploads are created. Logs, results and the backup resource list are
+	// uploaded as usual. Plugins should check this field before directly
+	// creating anything in-cluster.
+	// +optional
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 // UploaderConfigForBackup defines the configuration for the uploader when doing backup.
