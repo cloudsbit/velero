@@ -5,19 +5,21 @@
 # 前提: Dockerfile 为多阶段自包含(容器内编译 velero/velero-restore-helper/velero-helper)。
 #
 # 用法:
-#   ./build-and-push.sh                     # 默认 VERSION=main, tag: main-linux-amd64
-#   ./build-and-push.sh -t v1.19.0          # 自定义版本号
-#   ./build-and-push.sh -l                  # 额外推 :latest
-#   ./build-and-push.sh -n                  # 不用缓存全量重编
-#   ./build-and-push.sh --push-only         # 跳过构建,只推送已有镜像
+#   ./build-and-push.sh                        # 默认 cloudsbit/velero:main-linux-amd64
+#   ./build-and-push.sh -t v1.19.0             # 自定义版本号
+#   ./build-and-push.sh -l                     # 额外推 :latest
+#   ./build-and-push.sh -n                     # 不用缓存全量重编
+#   ./build-and-push.sh --push-only            # 跳过构建,只推送已有镜像
+#   ./build-and-push.sh -N ""                  # 扁平路径(无 namespace)
 #
-# 可用环境变量覆盖默认值: REGISTRY / REPO / PLATFORM / GOPROXY_BUILDER
+# 可用环境变量覆盖默认值: REGISTRY / NAMESPACE / REPO / PLATFORM / GOPROXY_BUILDER
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
 # ============================ 可调参数 ============================
 REGISTRY="${REGISTRY:-192.168.1.177:5000}"     # 内网 HTTP registry (registry:2, 无认证)
+NAMESPACE="${NAMESPACE-cloudsbit}"             # 仓库 namespace,传空串则用扁平路径
 REPO="${REPO:-velero}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 GOPROXY_BUILDER="${GOPROXY_BUILDER:-https://goproxy.cn}"
@@ -27,21 +29,30 @@ NO_CACHE=0
 PUSH_ONLY=0
 ALSO_LATEST=0
 
-usage() { sed -n '2,14p' "$0"; exit 0; }
+usage() { sed -n '2,17p' "$0"; exit 0; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -t|--version)  VERSION="$2";   shift 2 ;;
-        -n|--no-cache) NO_CACHE=1;     shift   ;;
-        --push-only)   PUSH_ONLY=1;    shift   ;;
-        -l|--latest)   ALSO_LATEST=1;  shift   ;;
-        -h|--help)     usage                   ;;
+        -t|--version)   VERSION="$2";     shift 2 ;;
+        -N|--namespace) NAMESPACE="$2";   shift 2 ;;
+        -n|--no-cache)  NO_CACHE=1;       shift   ;;
+        --push-only)    PUSH_ONLY=1;      shift   ;;
+        -l|--latest)    ALSO_LATEST=1;    shift   ;;
+        -h|--help)      usage                     ;;
         *) echo "未知参数: $1 (见 --help)"; exit 1 ;;
     esac
 done
 
 ARCH_TAG="${VERSION}-${PLATFORM//\//-}"        # 例: main-linux-amd64
-FULL_IMAGE="${REGISTRY}/${REPO}"
+if [[ -n "$NAMESPACE" ]]; then
+    FULL_IMAGE="${REGISTRY}/${NAMESPACE}/${REPO}"
+    REGISTRY_BUILD_ARG="${REGISTRY}/${NAMESPACE}"   # 编译进 buildinfo.ImageRegistry
+    REPO_PATH="${NAMESPACE}/${REPO}"                # registry API 路径
+else
+    FULL_IMAGE="${REGISTRY}/${REPO}"
+    REGISTRY_BUILD_ARG="${REGISTRY}"
+    REPO_PATH="${REPO}"
+fi
 ARCH_TAG_LATEST="latest"
 
 log() { echo "[build-and-push] $*"; }
@@ -86,7 +97,7 @@ if [[ $PUSH_ONLY -eq 0 ]]; then
         --build-arg "VERSION=${VERSION}"
         --build-arg "GIT_SHA=${GIT_SHA}"
         --build-arg "GIT_TREE_STATE=${GIT_TREE_STATE}"
-        --build-arg "REGISTRY=${REGISTRY}"
+        --build-arg "REGISTRY=${REGISTRY_BUILD_ARG}"
         -f Dockerfile .
     )
     [[ $NO_CACHE -eq 1 ]] && BUILD_ARGS+=( --no-cache )
@@ -113,7 +124,7 @@ fi
 
 # ============================ 验证 ============================
 log "验证远端 registry"
-TAGS="$(curl -sf --noproxy '*' --max-time 10 "http://${REGISTRY}/v2/${REPO}/tags/list")" \
+TAGS="$(curl -sf --noproxy '*' --max-time 10 "http://${REGISTRY}/v2/${REPO_PATH}/tags/list")" \
     || { log "验证失败: registry 不可达"; exit 1; }
 log "远端 tags: ${TAGS}"
 log "完成: ${FULL_IMAGE}:${ARCH_TAG}"
