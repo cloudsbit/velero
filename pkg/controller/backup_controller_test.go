@@ -2317,6 +2317,17 @@ func TestValidateAndGetSnapshotLocations(t *testing.T) {
 			expectedErrors:                      "provider aws has more than one possible volume snapshot location, and none were specified explicitly or as a default",
 			bsl:                                 *defaultBSL,
 		},
+		{
+			name:   "dry run backup skips VSL validation: multiple VSLs for a provider without a default succeeds with no locations",
+			backup: defaultBackup().Phase(velerov1api.BackupPhaseNew).DryRun(true).Result(),
+			locations: []*velerov1api.VolumeSnapshotLocation{
+				builder.ForVolumeSnapshotLocation(velerov1api.DefaultNamespace, "aws-us-east-1").Provider("aws").Result(),
+				builder.ForVolumeSnapshotLocation(velerov1api.DefaultNamespace, "aws-us-west-1").Provider("aws").Result(),
+			},
+			expectedVolumeSnapshotLocationNames: nil,
+			expectedSuccess:                     true,
+			bsl:                                 *defaultBSL,
+		},
 	}
 
 	for _, test := range tests {

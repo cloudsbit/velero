@@ -783,6 +783,13 @@ func (b *backupReconciler) validateAndGetSnapshotLocations(ctx context.Context, 
 	errors := []string{}
 	providerLocations := make(map[string]*velerov1api.VolumeSnapshotLocation)
 
+	// Dry-run backups never take snapshots, so no VolumeSnapshotLocations are
+	// needed: skip validation entirely rather than failing when a provider has
+	// multiple locations and none is specified/defaulted.
+	if backup.Spec.DryRun {
+		return providerLocations, errors
+	}
+
 	for _, locationName := range backup.Spec.VolumeSnapshotLocations {
 		// validate each locationName exists as a VolumeSnapshotLocation
 		location := &velerov1api.VolumeSnapshotLocation{}
