@@ -72,6 +72,22 @@ func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 		return nil, errors.Wrapf(err, "error to get backup for restore %s", input.Restore.Name)
 	}
 
+	// 归档中的 DU CR 可能来自其它历史备份：DU CR 完成后常驻 velero 命名空间（供数据卷
+	// 明细等消费），namespace-'*' 备份会把它们全部收入归档。结果 CM 按 restore-uid +
+	// 源 PVC 标签做唯一性匹配（getDataUploadResult 要求恰好一个），非本备份的 DU 若也
+	// 生成结果 CM，同一 PVC 会命中多个 → "multiple DataUpload result cms found" 阻断
+	// 恢复；更糟的是仅剩一个时可能错配旧备份快照，静默恢复出错误时点的数据。
+	// 因此只认本次恢复源备份自己的 DU（backup-uid 精确比对，防止同名备份重建），
+	// 其余 DU 跳过且不创建结果 CM。
+	if dataUpload.Labels[velerov1api.BackupUIDLabel] != string(backup.UID) {
+		d.logger.Infof("Skipping DataUpload %s/%s of backup %s: not the restore source backup %s",
+			dataUpload.Namespace, dataUpload.Name,
+			dataUpload.Labels[velerov1api.BackupNameLabel], input.Restore.Spec.BackupName)
+		return &velero.RestoreItemActionExecuteOutput{
+			SkipRestore: true,
+		}, nil
+	}
+
 	dataUploadResult := velerov2alpha1.DataUploadResult{
 		BackupStorageLocation: backup.Spec.StorageLocation,
 		DataMover:             dataUpload.Spec.DataMover,
