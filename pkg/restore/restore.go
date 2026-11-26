@@ -1562,6 +1562,18 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 				}
 
 			case volume.PodVolumeBackup:
+				if keepStaticPVRequested(ctx.restore) {
+					// Keep-static restore: restore the PV object itself (renamed if the
+					// name conflicts) instead of dynamic reprovisioning, which static
+					// StorageClasses (e.g. no-provisioner NFS) can never fulfill.
+					restoreLogger.Infof("Keep-static PV restore requested: restoring PV %s object instead of dynamic reprovision.", obj.GetName())
+					obj, err = ctx.handleSkippedPVHasRetainPolicy(obj, restoreLogger)
+					if err != nil {
+						errs.Add(namespace, err)
+						return warnings, errs, itemExists
+					}
+					break
+				}
 				restoreLogger.Infof("Dynamically re-provisioning persistent volume because it has a pod volume backup to be restored.")
 				ctx.pvsToProvision.Insert(backupResourceName)
 
@@ -1609,6 +1621,15 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 				}
 
 			case hasPodVolumeBackup(obj, ctx):
+				if keepStaticPVRequested(ctx.restore) {
+					restoreLogger.Infof("Keep-static PV restore requested: restoring PV %s object instead of dynamic reprovision.", obj.GetName())
+					obj, err = ctx.handleSkippedPVHasRetainPolicy(obj, restoreLogger)
+					if err != nil {
+						errs.Add(namespace, err)
+						return warnings, errs, itemExists
+					}
+					break
+				}
 				restoreLogger.Infof("Dynamically re-provisioning persistent volume because it has a pod volume backup to be restored.")
 				ctx.pvsToProvision.Insert(backupResourceName)
 
@@ -2308,13 +2329,30 @@ func isAlreadyExistsError(ctx *restoreContext, obj *unstructured.Unstructured, e
 	return true, nil
 }
 
+// keepStaticPVAnnotation 恢复级注解（k8sdr 迁移编排生成，随 Restore CR 下发）：
+// 保型静态卷恢复时保留 PV 对象本身——引擎默认对有 PVB 的卷跳过 PV 对象恢复、
+// 强制按 SC 动态重供应，静态 SC（如 no-provisioner 的 NFS）无法满足导致 PVC
+// 永远 Pending；开启后改走 PV 对象恢复路径，目标集群已存在同名 PV 时自动改名。
+const keepStaticPVAnnotation = "k8sdr.io/keep-static-pv"
+
+func keepStaticPVRequested(restore *velerov1api.Restore) bool {
+	if restore == nil {
+		return false
+	}
+	return restore.Annotations[keepStaticPVAnnotation] == "true"
+}
+
 // shouldRenamePV returns a boolean indicating whether a persistent volume should
 // be given a new name before being restored, or an error if this cannot be determined.
 // A persistent volume will be given a new name if and only if (a) a PV with the
 // original name already exists in-cluster, and (b) in the backup, the PV is claimed
 // by a PVC in a namespace that's being remapped during the restore.
+// With the keep-static annotation, requirement (b) is dropped: the rename solely
+// avoids the name conflict, since the restored PVC is expected at the original
+// (or remapped) namespace with the same name.
 func shouldRenamePV(ctx *restoreContext, obj *unstructured.Unstructured, client client.Dynamic) (bool, error) {
-	if len(ctx.restore.Spec.NamespaceMapping) == 0 {
+	keepStatic := keepStaticPVRequested(ctx.restore)
+	if !keepStatic && len(ctx.restore.Spec.NamespaceMapping) == 0 {
 		ctx.log.Debugf("Persistent volume does not need to be renamed because restore is not remapping any namespaces")
 		return false, nil
 	}
@@ -2329,9 +2367,11 @@ func shouldRenamePV(ctx *restoreContext, obj *unstructured.Unstructured, client 
 		return false, nil
 	}
 
-	if _, ok := ctx.restore.Spec.NamespaceMapping[pv.Spec.ClaimRef.Namespace]; !ok {
-		ctx.log.Debugf("Persistent volume does not need to be renamed because it's not claimed by a PVC in a namespace that's being remapped")
-		return false, nil
+	if !keepStatic {
+		if _, ok := ctx.restore.Spec.NamespaceMapping[pv.Spec.ClaimRef.Namespace]; !ok {
+			ctx.log.Debugf("Persistent volume does not need to be renamed because it's not claimed by a PVC in a namespace that's being remapped")
+			return false, nil
+		}
 	}
 
 	_, err := client.Get(pv.Name, metav1.GetOptions{})
@@ -3250,6 +3290,38 @@ func (ctx *restoreContext) handleSkippedPVHasRetainPolicy(
 	logger logrus.FieldLogger,
 ) (*unstructured.Unstructured, error) {
 	logger.Infof("Restoring persistent volume as-is because it doesn't have a snapshot and its reclaim policy is not Delete.")
+
+	// Keep-static restores rename the PV when the original name already exists
+	// in-cluster, otherwise the creation would be skipped under the "none"
+	// existing-resource policy and the restored PVC could never bind. Namespace-
+	// remapping restores keep the upstream behavior (warning, no rename).
+	if keepStaticPVRequested(ctx.restore) {
+		resourceClient, err := ctx.getResourceClient(kuberesource.PersistentVolumes, obj, "")
+		if err != nil {
+			return nil, errors.Wrapf(err, "error getting resource client for persistent volumes")
+		}
+		rename, err := shouldRenamePV(ctx, obj, resourceClient)
+		if err != nil {
+			return nil, err
+		}
+		if rename {
+			oldName := obj.GetName()
+			pvName, err := ctx.pvRenamer(oldName)
+			if err != nil {
+				return nil, errors.Wrapf(err, "error renaming PV")
+			}
+			ctx.renamedPVs[oldName] = pvName
+			obj.SetName(pvName)
+			// Add the original PV name as an annotation.
+			annotations := obj.GetAnnotations()
+			if annotations == nil {
+				annotations = map[string]string{}
+			}
+			annotations["velero.io/original-pv-name"] = oldName
+			obj.SetAnnotations(annotations)
+			logger.Infof("Persistent volume %s already exists in the cluster, renamed to %s.", oldName, pvName)
+		}
+	}
 
 	// Check to see if the claimRef.namespace field needs to be remapped, and do so if necessary.
 	if _, err := remapClaimRefNS(ctx, obj); err != nil {
