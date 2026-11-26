@@ -124,6 +124,22 @@ func TestDataUploadRetrieveActionExectue(t *testing.T) {
 				builder.ForBackup("velero", "testBackup").ObjectMeta(builder.WithUID("backupUID")).StorageLocation("testLocation").Result(),
 			},
 		},
+		{
+			// 跨集群迁移/恢复：目标集群 Backup CR 由同步控制器重建、UID 必然变化，
+			// DU 仅 backup-name 标签匹配源备份名时也应放行生成结果 CM
+			name: "Resynced backup with different UID still matches by backup name",
+			dataUpload: func() *velerov2alpha1.DataUpload {
+				du := builder.ForDataUpload("velero", "testDU").SourceNamespace("testNamespace").SourcePVC("testPVC").SnapshotID("fake-id").TotalBytes(1000).Result()
+				du.Labels = map[string]string{velerov1.BackupNameLabel: "testBackup", velerov1.BackupUIDLabel: "originalSourceUID"}
+				return du
+			}(),
+			restore:       builder.ForRestore("velero", "testRestore").ObjectMeta(builder.WithUID("testingUID")).Backup("testBackup").Result(),
+			runtimeScheme: scheme,
+			veleroObjs: []runtime.Object{
+				builder.ForBackup("velero", "testBackup").ObjectMeta(builder.WithUID("resyncedUID")).StorageLocation("testLocation").Result(),
+			},
+			expectedDataUploadResult: builder.ForConfigMap("velero", "").ObjectMeta(builder.WithGenerateName("testDU-"), builder.WithLabels(velerov1.PVCNamespaceNameLabel, "testNamespace.testPVC", velerov1.RestoreUIDLabel, "testingUID", velerov1.ResourceUsageLabel, string(velerov1.VeleroResourceUsageDataUploadResult))).Data("testingUID", `{"backupStorageLocation":"testLocation","snapshotID":"fake-id","sourceNamespace":"testNamespace","snapshotSize":1000}`).Result(),
+		},
 	}
 
 	for _, tc := range tests {

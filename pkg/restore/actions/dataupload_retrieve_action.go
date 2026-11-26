@@ -77,9 +77,12 @@ func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 	// 源 PVC 标签做唯一性匹配（getDataUploadResult 要求恰好一个），非本备份的 DU 若也
 	// 生成结果 CM，同一 PVC 会命中多个 → "multiple DataUpload result cms found" 阻断
 	// 恢复；更糟的是仅剩一个时可能错配旧备份快照，静默恢复出错误时点的数据。
-	// 因此只认本次恢复源备份自己的 DU（backup-uid 精确比对，防止同名备份重建），
-	// 其余 DU 跳过且不创建结果 CM。
-	if dataUpload.Labels[velerov1api.BackupUIDLabel] != string(backup.UID) {
+	// 因此只认本次恢复源备份自己的 DU：同集群恢复按 backup-uid 精确比对；跨集群迁移/
+	// 恢复时目标集群的 Backup CR 由同步控制器重建、UID 必然变化，退化为按 backup-name
+	// 比对（DU 标签携带源备份名，同步保留名称），二者任一匹配即放行。
+	duBackupName := dataUpload.Labels[velerov1api.BackupNameLabel]
+	duBackupUID := dataUpload.Labels[velerov1api.BackupUIDLabel]
+	if duBackupName != input.Restore.Spec.BackupName && duBackupUID != string(backup.UID) {
 		d.logger.Infof("Skipping DataUpload %s/%s of backup %s: not the restore source backup %s",
 			dataUpload.Namespace, dataUpload.Name,
 			dataUpload.Labels[velerov1api.BackupNameLabel], input.Restore.Spec.BackupName)
